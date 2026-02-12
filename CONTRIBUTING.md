@@ -100,10 +100,10 @@ git push origin v1.0.0
 Submit your pack to the [OpenPeon registry](https://github.com/PeonPing/registry):
 
 1. Fork [PeonPing/registry](https://github.com/PeonPing/registry)
-2. Create `packs/my-pack/registry.json` (see [registry CONTRIBUTING.md](https://github.com/PeonPing/registry/blob/main/CONTRIBUTING.md))
+2. Add your pack entry to `index.json` (keep alphabetical order — see [registry CONTRIBUTING.md](https://github.com/PeonPing/registry/blob/main/CONTRIBUTING.md))
 3. Open a pull request
 
-Once merged, your pack will be available for installation and listed on [openpeon.com/packs](https://openpeon.com/packs).
+Once merged, your pack will be installable by everyone and listed on [openpeon.com/packs](https://openpeon.com/packs).
 
 ### 5. Bump the version
 
@@ -145,6 +145,16 @@ ffmpeg -i your_audio.mp3 -ss 2.0 -to 4.8 -c copy sounds/Quote2.mp3 -y
 ```
 
 4. Map the clips to categories in `openpeon.json` and you're done.
+
+## Contribute code
+
+Bug fixes, new features, and IDE adapters are welcome as PRs to this repo. Sound packs should **not** be added here — use the registry flow above.
+
+Run tests before submitting:
+
+```bash
+bats tests/
+```
 
 ## Pack ideas
 
