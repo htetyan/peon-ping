@@ -489,3 +489,161 @@ JSON
   sound=$(afplay_sound)
   [[ "$sound" == *"/packs/peon/sounds/"* ]]
 }
+
+# ============================================================
+# Linux audio backend detection (order of preference)
+# ============================================================
+
+@test "Linux detects pw-play first" {
+  export PLATFORM=linux
+  # Disable all other players to ensure pw-play is selected
+  for player in paplay ffplay mpv play aplay; do
+    touch "$TEST_DIR/.disabled_${player}"
+  done
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"--volume"* ]]
+}
+
+@test "Linux detects paplay when pw-play not available" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"--volume"* ]]
+}
+
+@test "Linux detects ffplay when pw-play and paplay not available" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"-volume"* ]]
+}
+
+@test "Linux detects mpv when pw-play, paplay, and ffplay not available" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay" "$TEST_DIR/.disabled_ffplay"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"--volume"* ]]
+}
+
+@test "Linux detects play (SoX) when pw-play through mpv not available" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay" "$TEST_DIR/.disabled_ffplay" "$TEST_DIR/.disabled_mpv"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"-v"* ]]
+}
+
+@test "Linux falls back to aplay when no other backend available" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay" "$TEST_DIR/.disabled_ffplay" "$TEST_DIR/.disabled_mpv" "$TEST_DIR/.disabled_play"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"-q"* ]]
+}
+
+@test "Linux continues gracefully when no audio backend available" {
+  export PLATFORM=linux
+  for player in pw-play paplay ffplay mpv play aplay; do
+    touch "$TEST_DIR/.disabled_${player}"
+  done
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  ! linux_audio_was_called
+  [[ "$PEON_STDERR" == *"WARNING: No audio backend found"* ]]
+}
+
+# ============================================================
+# Linux volume handling per backend
+# ============================================================
+
+@test "Linux pw-play uses --volume with decimal" {
+  export PLATFORM=linux
+  for player in paplay ffplay mpv play aplay; do
+    touch "$TEST_DIR/.disabled_${player}"
+  done
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.3, "enabled": true, "categories": {} }
+JSON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"--volume 0.3"* ]]
+}
+
+@test "Linux paplay scales volume to PulseAudio range" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play"
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {} }
+JSON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  # 0.5 * 65536 = 32768
+  [[ "$cmdline" == *"--volume=32768"* ]]
+}
+
+@test "Linux ffplay scales volume to 0-100" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay"
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {} }
+JSON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  # 0.5 * 100 = 50
+  [[ "$cmdline" == *"-volume 50"* ]]
+}
+
+@test "Linux mpv scales volume to 0-100" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay" "$TEST_DIR/.disabled_ffplay"
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {} }
+JSON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  # 0.5 * 100 = 50
+  [[ "$cmdline" == *"--volume=50"* ]]
+}
+
+@test "Linux play (SoX) uses -v with decimal" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay" "$TEST_DIR/.disabled_ffplay" "$TEST_DIR/.disabled_mpv"
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.3, "enabled": true, "categories": {} }
+JSON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  [[ "$cmdline" == *"-v 0.3"* ]]
+}
+
+@test "Linux aplay does not support volume control" {
+  export PLATFORM=linux
+  touch "$TEST_DIR/.disabled_pw-play" "$TEST_DIR/.disabled_paplay" "$TEST_DIR/.disabled_ffplay" "$TEST_DIR/.disabled_mpv" "$TEST_DIR/.disabled_play"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  linux_audio_was_called
+  cmdline=$(linux_audio_cmdline)
+  # aplay is used and no volume flags are passed
+  [[ "$cmdline" != *"volume"* ]]
+  [[ "$cmdline" != *"-v "* ]]
+}

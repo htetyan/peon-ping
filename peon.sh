@@ -16,11 +16,109 @@ detect_platform() {
     *) echo "unknown" ;;
   esac
 }
-PLATFORM=$(detect_platform)
+PLATFORM=${PLATFORM:-$(detect_platform)}
 
 PEON_DIR="${CLAUDE_PEON_DIR:-$HOME/.claude/hooks/peon-ping}"
 CONFIG="$PEON_DIR/config.json"
 STATE="$PEON_DIR/.state.json"
+
+# --- Linux audio backend detection ---
+detect_linux_player() {
+  # Helper to check if a player is available (respects test-mode disable markers)
+  player_available() {
+    local cmd="$1"
+    command -v "$cmd" &>/dev/null || return 1
+    # In test mode, check for disable marker
+    [ "${PEON_TEST:-0}" = "1" ] && [ -f "${CLAUDE_PEON_DIR}/.disabled_${cmd}" ] && return 1
+    return 0
+  }
+
+  if player_available pw-play; then
+    echo "pw-play"
+  elif player_available paplay; then
+    echo "paplay"
+  elif player_available ffplay; then
+    echo "ffplay"
+  elif player_available mpv; then
+    echo "mpv"
+  elif player_available play; then
+    echo "play"
+  elif player_available aplay; then
+    echo "aplay"
+  else
+    # Warn only once per process to avoid spam
+    if [ -z "${WARNED_NO_LINUX_AUDIO_BACKEND:-}" ]; then
+      echo "WARNING: No audio backend found. Please install one of: pw-play, paplay, ffplay, mpv, play (SoX), or aplay" >&2
+      WARNED_NO_LINUX_AUDIO_BACKEND=1
+    fi
+    return 1
+  fi
+}
+
+# --- Linux audio playback with backend-specific volume handling ---
+play_linux_sound() {
+  local file="$1" vol="$2" player="$3"
+
+  # Skip playback if no backend available
+  [ -z "$player" ] && return 0
+
+  # Background mode: use nohup & for async playback (default)
+  # Synchronous mode: no nohup/& for tests (when PEON_TEST=1)
+  local use_bg=true
+  [ "${PEON_TEST:-0}" = "1" ] && use_bg=false
+
+  case "$player" in
+    pw-play)
+      # pw-play (PipeWire) expects volume as float 0.0-1.0 (unlike paplay 0-65536, ffplay/mpv 0-100)
+      if [ "$use_bg" = true ]; then
+        nohup pw-play --volume "$vol" "$file" >/dev/null 2>&1 &
+      else
+        pw-play --volume "$vol" "$file" >/dev/null 2>&1
+      fi
+      ;;
+    paplay)
+      local pa_vol
+      pa_vol=$(python3 -c "print(max(0, min(65536, int($vol * 65536))))")
+      if [ "$use_bg" = true ]; then
+        nohup paplay --volume="$pa_vol" "$file" >/dev/null 2>&1 &
+      else
+        paplay --volume="$pa_vol" "$file" >/dev/null 2>&1
+      fi
+      ;;
+    ffplay)
+      local ff_vol
+      ff_vol=$(python3 -c "print(max(0, min(100, int($vol * 100))))")
+      if [ "$use_bg" = true ]; then
+        nohup ffplay -nodisp -autoexit -volume "$ff_vol" "$file" >/dev/null 2>&1 &
+      else
+        ffplay -nodisp -autoexit -volume "$ff_vol" "$file" >/dev/null 2>&1
+      fi
+      ;;
+    mpv)
+      local mpv_vol
+      mpv_vol=$(python3 -c "print(max(0, min(100, int($vol * 100))))")
+      if [ "$use_bg" = true ]; then
+        nohup mpv --no-video --volume="$mpv_vol" "$file" >/dev/null 2>&1 &
+      else
+        mpv --no-video --volume="$mpv_vol" "$file" >/dev/null 2>&1
+      fi
+      ;;
+    play)
+      if [ "$use_bg" = true ]; then
+        nohup play -v "$vol" "$file" >/dev/null 2>&1 &
+      else
+        play -v "$vol" "$file" >/dev/null 2>&1
+      fi
+      ;;
+    aplay)
+      if [ "$use_bg" = true ]; then
+        nohup aplay -q "$file" >/dev/null 2>&1 &
+      else
+        aplay -q "$file" >/dev/null 2>&1
+      fi
+      ;;
+  esac
+}
 
 # --- Platform-aware audio playback ---
 play_sound() {
@@ -46,24 +144,10 @@ play_sound() {
       " &>/dev/null &
       ;;
     linux)
-      # Try common Linux audio players in order of preference
-      if command -v pw-play &>/dev/null; then
-        local pw_vol
-        nohup pw-play --volume="$vol" "$file" >/dev/null 2>&1 &
-      elif command -v paplay &>/dev/null; then
-        local pa_vol
-        pa_vol=$(python3 -c "print(int($vol * 65536))")
-        nohup paplay --volume="$pa_vol" "$file" >/dev/null 2>&1 &
-      elif command -v ffplay &>/dev/null; then
-        local ff_vol
-        ff_vol=$(python3 -c "print(int($vol * 100))")
-        nohup ffplay -nodisp -autoexit -volume "$ff_vol" "$file" >/dev/null 2>&1 &
-      elif command -v mpv &>/dev/null; then
-        local mpv_vol
-        mpv_vol=$(python3 -c "print(int($vol * 100))")
-        nohup mpv --no-video --volume="$mpv_vol" "$file" >/dev/null 2>&1 &
-      elif command -v aplay &>/dev/null; then
-        nohup aplay -q "$file" >/dev/null 2>&1 &
+      local player
+      player=$(detect_linux_player) || player=""
+      if [ -n "$player" ]; then
+        play_linux_sound "$file" "$vol" "$player"
       fi
       ;;
   esac
@@ -156,7 +240,8 @@ terminal_is_focused() {
       return 1
       ;;
     linux)
-      if command -v xdotool &>/dev/null; then
+      # Only use xdotool on X11; fallback to always notify on Wayland or if xdotool is missing
+      if [ "${XDG_SESSION_TYPE:-}" = "x11" ] && command -v xdotool &>/dev/null; then
         local win_name
         win_name=$(xdotool getactivewindow getwindowname 2>/dev/null || echo "")
         if [[ "$win_name" =~ (terminal|konsole|alacritty|kitty|wezterm|foot|tilix|gnome-terminal|xterm|xfce4-terminal|sakura|terminator|st|urxvt|ghostty) ]]; then

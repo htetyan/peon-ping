@@ -118,6 +118,15 @@ echo "$@" >> "${CLAUDE_PEON_DIR}/afplay.log"
 SCRIPT
   chmod +x "$MOCK_BIN/afplay"
 
+  # Mock Linux audio backends — log calls instead of playing sound
+  for player in pw-play paplay ffplay mpv play aplay; do
+    cat > "$MOCK_BIN/$player" <<'SCRIPT'
+#!/bin/bash
+echo "$@" >> "${CLAUDE_PEON_DIR}/linux_audio.log"
+SCRIPT
+    chmod +x "$MOCK_BIN/$player"
+  done
+
   # Mock osascript — log calls instead of running AppleScript
   cat > "$MOCK_BIN/osascript" <<'SCRIPT'
 #!/bin/bash
@@ -154,6 +163,7 @@ teardown_test_env() {
 # Helper: run peon.sh with a JSON event
 run_peon() {
   local json="$1"
+  export PEON_TEST=1
   echo "$json" | bash "$PEON_SH" 2>"$TEST_DIR/stderr.log"
   PEON_EXIT=$?
   PEON_STDERR=$(cat "$TEST_DIR/stderr.log" 2>/dev/null)
@@ -178,5 +188,17 @@ afplay_call_count() {
     wc -l < "$TEST_DIR/afplay.log" | tr -d ' '
   else
     echo "0"
+  fi
+}
+
+# Helper: check if a Linux audio player was called
+linux_audio_was_called() {
+  [ -f "$TEST_DIR/linux_audio.log" ] && [ -s "$TEST_DIR/linux_audio.log" ]
+}
+
+# Helper: get the command line used for Linux audio
+linux_audio_cmdline() {
+  if [ -f "$TEST_DIR/linux_audio.log" ]; then
+    tail -1 "$TEST_DIR/linux_audio.log"
   fi
 }
