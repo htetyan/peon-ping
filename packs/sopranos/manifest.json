@@ -4,7 +4,6 @@
   "categories": {
     "greeting": {
       "sounds": [
-        { "file": "Greeting_GabagoolOvaHere.mp3", "line": "Gabagool? Ova here!" },
         { "file": "Greeting_HiItsMe.mp3", "line": "Hi, it's me" },
         { "file": "Greeting_OhYeah.mp3", "line": "Oh yeah?" },
         { "file": "Greeting_SomethingToSay.mp3", "line": "Something you wanna say to me?" }
@@ -37,6 +36,7 @@
     },
     "permission": {
       "sounds": [
+        { "file": "Greeting_GabagoolOvaHere.mp3", "line": "Gabagool? Ova here!" },
         { "file": "Permission_WhatGonnaDo.mp3", "line": "What are you gonna do?" },
         { "file": "Permission_TellMe.mp3", "line": "Tell me" },
         { "file": "Permission_WhatsHeWant.mp3", "line": "What's he want?" },
