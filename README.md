@@ -26,7 +26,7 @@ Then run `peon-ping-setup` to register hooks and download sound packs. macOS and
 curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash
 ```
 
-Installs 10 curated English packs by default. Re-run to update while preserving config/state.
+Installs 10 curated English packs by default. Re-run to update while preserving config/state. Or **[pick your packs interactively at peonping.com](https://peonping.com/#picker)** and get a custom install command.
 
 Useful installer flags:
 
