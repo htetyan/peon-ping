@@ -448,24 +448,119 @@ function playSound(filePath: string, volume: number): void {
 // Platform: Desktop Notifications
 // ---------------------------------------------------------------------------
 
-function sendNotification(msg: string, title: string): void {
+/** Notification options for rich desktop notifications */
+interface NotifyOptions {
+  title: string
+  subtitle?: string
+  body: string
+  /** Group ID for notification coalescing (terminal-notifier only) */
+  group?: string
+  /** Path to custom icon image (terminal-notifier only) */
+  iconPath?: string
+}
+
+/**
+ * Detect whether terminal-notifier is available.
+ * Cached at plugin init for performance.
+ *
+ * TODO: terminal-notifier (github.com/julienXX/terminal-notifier) is unmaintained
+ * (last commit 2021) and uses the deprecated NSUserNotification API. Consider
+ * migrating to jamf/Notifier (github.com/jamf/Notifier) which uses the modern
+ * UserNotifications framework and has built-in --rebrand support for custom icons.
+ * Migrate when jamf/Notifier is published to Homebrew or when terminal-notifier
+ * breaks on a future macOS release.
+ */
+function detectTerminalNotifier(): string | null {
+  try {
+    const result = Bun.spawnSync(["which", "terminal-notifier"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    })
+    const p = new TextDecoder().decode(result.stdout).trim()
+    if (p && result.exitCode === 0) return p
+  } catch {}
+  return null
+}
+
+/**
+ * Resolve the peon-ping icon path for notifications.
+ * Checks Homebrew libexec, then Claude hooks dir, then pack dir.
+ */
+function resolveIconPath(): string | null {
+  const candidates = [
+    // Homebrew-installed icon (via formula)
+    "/opt/homebrew/opt/peon-ping/libexec/docs/peon-icon.png",
+    "/usr/local/opt/peon-ping/libexec/docs/peon-icon.png",
+    // Claude hooks install
+    path.join(os.homedir(), ".claude", "hooks", "peon-ping", "docs", "peon-icon.png"),
+    // Plugin dir
+    path.join(PLUGIN_DIR, "peon-icon.png"),
+  ]
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p
+  }
+  return null
+}
+
+/**
+ * Escape a string for safe use inside AppleScript double-quoted strings.
+ */
+function escapeAppleScript(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+function sendNotification(opts: NotifyOptions, terminalNotifierPath: string | null): void {
   const platform = os.platform()
 
   if (platform === "darwin") {
+    // Prefer terminal-notifier for rich notifications (custom icon, grouping)
+    // TODO: Replace with jamf/Notifier when available via Homebrew — see detectTerminalNotifier()
+    if (terminalNotifierPath) {
+      try {
+        const args = [
+          terminalNotifierPath,
+          "-title", opts.title,
+          "-message", opts.body,
+          "-group", opts.group || "peon-ping",
+        ]
+        if (opts.subtitle) {
+          args.push("-subtitle", opts.subtitle)
+        }
+        if (opts.iconPath) {
+          args.push("-appIcon", opts.iconPath)
+        }
+        const proc = Bun.spawn(args, { stdout: "ignore", stderr: "ignore" })
+        proc.unref()
+        return
+      } catch {
+        // Fall through to osascript
+      }
+    }
+
+    // Fallback: osascript with subtitle support
     try {
+      const title = escapeAppleScript(opts.title)
+      const body = escapeAppleScript(opts.body)
+      let script = `display notification "${body}" with title "${title}"`
+      if (opts.subtitle) {
+        script += ` subtitle "${escapeAppleScript(opts.subtitle)}"`
+      }
       const proc = Bun.spawn(
-        [
-          "osascript",
-          "-e",
-          `display notification "${msg}" with title "${title}"`,
-        ],
+        ["osascript", "-e", script],
         { stdout: "ignore", stderr: "ignore" },
       )
       proc.unref()
     } catch {}
   } else if (platform === "linux") {
     try {
-      const proc = Bun.spawn(["notify-send", title, msg], {
+      const args = ["notify-send", opts.title]
+      // Combine subtitle and body for Linux
+      const fullBody = opts.subtitle ? `${opts.subtitle}\n${opts.body}` : opts.body
+      args.push(fullBody)
+      if (opts.iconPath) {
+        args.push("-i", opts.iconPath)
+      }
+      const proc = Bun.spawn(args, {
         stdout: "ignore",
         stderr: "ignore",
       })
@@ -550,6 +645,10 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
     return {}
   }
 
+  // --- Notification capabilities (detected once at init) ---
+  const terminalNotifierPath = detectTerminalNotifier()
+  const iconPath = resolveIconPath()
+
   // --- In-memory state for debouncing and spam detection ---
   const promptTimestamps: number[] = []
   const lastEventTime: Partial<Record<CESPCategory, number>> = {}
@@ -595,14 +694,14 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
       status?: string
       marker?: string
       notify?: boolean
-      notifyMsg?: string
+      notifyTitle?: string
     } = {},
   ): Promise<void> {
     const {
       status = "",
       marker = "",
       notify = false,
-      notifyMsg = "",
+      notifyTitle = "",
     } = opts
     const paused = isPaused()
 
@@ -614,13 +713,13 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
     // Debounce check
     if (shouldDebounce(category)) return
 
-    // Sound
+    // Pick sound (needed for both playback and notification body)
+    let pickedSound: CESPSound | null = null
     if (config.categories[category] !== false && !paused) {
       const currentState = loadState()
-      const sound = pickSound(manifest!, category, currentState)
-      if (sound) {
-        // Sound paths are relative to manifest per CESP spec
-        const soundPath = path.join(packDir, sound.file)
+      pickedSound = pickSound(manifest!, category, currentState)
+      if (pickedSound) {
+        const soundPath = path.join(packDir, pickedSound.file)
         playSound(soundPath, config.volume)
         saveState(currentState)
       }
@@ -630,9 +729,19 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
     if (notify && !paused) {
       const focused = await isTerminalFocused()
       if (!focused) {
+        const title = notifyTitle || `${marker}${projectName}: ${status}`
+        const body = pickedSound?.label
+          ? `\uD83D\uDDE3 "${pickedSound.label}"`
+          : `${marker}${projectName}`
         sendNotification(
-          notifyMsg,
-          `${marker}${projectName}: ${status}`,
+          {
+            title,
+            subtitle: manifest!.display_name,
+            body,
+            group: `peon-ping-${projectName}`,
+            iconPath: iconPath || undefined,
+          },
+          terminalNotifierPath,
         )
       }
     }
@@ -657,7 +766,7 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
             status: "done",
             marker: "\u25cf ",
             notify: true,
-            notifyMsg: `${projectName} \u2014 Task complete`,
+            notifyTitle: `${projectName} \u2014 Task complete`,
           })
           break
         }
@@ -668,7 +777,7 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
             status: "error",
             marker: "\u25cf ",
             notify: true,
-            notifyMsg: `${projectName} \u2014 Error occurred`,
+            notifyTitle: `${projectName} \u2014 Error occurred`,
           })
           break
         }
@@ -679,7 +788,7 @@ export const PeonPingPlugin: Plugin = async ({ directory }) => {
             status: "needs approval",
             marker: "\u25cf ",
             notify: true,
-            notifyMsg: `${projectName} \u2014 Permission needed`,
+            notifyTitle: `${projectName} \u2014 Permission needed`,
           })
           break
         }
