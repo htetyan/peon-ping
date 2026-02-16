@@ -303,6 +303,11 @@ APPLESCRIPT
         fi
         # Strip leading marker (● ) from title for cleaner toast
         local toast_title="${title#● }"
+        # Escape XML special characters to prevent malformed toast XML
+        # Covers all 5 XML predefined entities and strips control chars illegal in XML 1.0
+        _escape_xml() { printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037' | sed "s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/\"/\&quot;/g; s/'/\&apos;/g"; }
+        toast_title="$(_escape_xml "$toast_title")"
+        toast_body="$(_escape_xml "$toast_body")"
         # Write toast XML to temp file (avoids bash/powershell escaping issues)
         cat > "${tmpdir_wsl}peon-toast.xml" <<TOASTEOF
 <toast duration="short"><visual><binding template="ToastGeneric"><text>${toast_body}</text><text>${toast_title}</text>${icon_xml}</binding></visual><audio silent="true" /></toast>
@@ -315,6 +320,7 @@ TOASTEOF
           $xml.LoadXml((Get-Content ($env:TEMP + "\peon-toast.xml") -Raw -Encoding UTF8))
           $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
           [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($APP_ID).Show($toast)
+          Remove-Item ($env:TEMP + "\peon-toast.xml") -ErrorAction SilentlyContinue
         ' &>/dev/null &
       else
         # Legacy Windows Forms popup
