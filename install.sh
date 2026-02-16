@@ -385,7 +385,7 @@ is_cached_valid() {
   [ -s "$filepath" ] || return 1
   [ -f "$checksums_file" ] || return 1
   local stored_hash current_hash
-  stored_hash=$(grep "^$filename " "$checksums_file" 2>/dev/null | cut -d' ' -f2)
+  stored_hash=$(grep -F "$filename " "$checksums_file" 2>/dev/null | head -1 | cut -d' ' -f2)
   [ -n "$stored_hash" ] || return 1
   current_hash=$(file_sha256 "$filepath")
   [ "$stored_hash" = "$current_hash" ]
@@ -397,7 +397,7 @@ store_checksum() {
   local hash
   hash=$(file_sha256 "$filepath")
   # Remove old entry if present, then append new one
-  grep -v "^$filename " "$checksums_file" > "$checksums_file.tmp" 2>/dev/null || true
+  grep -vF "$filename " "$checksums_file" > "$checksums_file.tmp" 2>/dev/null || true
   echo "$filename $hash" >> "$checksums_file.tmp"
   mv "$checksums_file.tmp" "$checksums_file"
 }
